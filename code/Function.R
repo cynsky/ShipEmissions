@@ -455,3 +455,198 @@ GeoDistanceInMetresMatrix <- function(df.geopoints){
   return(mat.distances)
 }
 
+#from long tra compression
+
+#note:no solution to the case that a ship could not find a refer ship btn (-250,+250)
+getSpeedandPower<-function(ships.global,ships.local){
+  ships1=data.table(mmsi=0,speed=0,powerkw=0)[mmsi<0]
+  for (i in (1:nrow(ships.local))){
+    
+    ship=ships.local[i]
+    
+    referships=ships.global[type_en=='Container'&dwt<=ship$CARRYING_CAPACITY+250&dwt>=ship$CARRYING_CAPACITY-250]
+    referships=referships[!is.na(speed)&!is.na(powerkw)]
+    print(nrow(referships))
+    temp=data.table(mmsi=ship$mmsi,speed=round(median(referships$speed)),powerkw=round(median(referships$powerkw)))
+    ships1=rbind(ships1,temp)
+  
+  }
+  
+  return(ships1)
+  
+}
+#use boxplot to remove trips with abnormal trip duration
+getNormalTrips<-function(trips){
+  
+  res1=quantile(log10(trips$duration),probs = c(0.25,0.75),na.rm = TRUE)
+  Qlow=res1[[1]]
+  Qhigh=res1[[2]]
+  IQR=Qhigh-Qlow
+  max=Qhigh+1.5*IQR
+  min=Qlow-1.5*IQR
+  res=trips[log10(duration)<=max&log10(duration)>=min]
+  return(res)
+  
+}
+
+
+#get lines of multiple ships
+getShipsLines<-function(points,gridscale=1000){
+  
+  #prepare ais msgs, mainly lines
+  # points=ais.allships
+  setkey(points,mmsi,time)
+  mmsis=points[,.N,by=mmsi]$mmsi
+  res=data.table( lon1=0,lat1=0,time1=0,sog1=0,pid1=0,gid1=0,g.lon1=0,g.lat1=0,
+                  lon2=0,lat2=0,time2=0,sog2=0,pid2=0,gid2=0,g.lon2=0,g.lat2=0,
+                  lid=0,timespan=0,distance=0,avgspeed1=0,avgspeed2=0,avgspeed=0,mmsi=0)[lid<0]
+  for (mm in mmsis){
+    
+    points1=points[mmsi==mm,list(lon,lat,time,sog)]
+    scale=gridscale #0.001*0.001 grids
+    points1=setPoints(points1,scale)
+    lines=setLines(points1)
+    lines=addLineSpeed(lines,150,0.5)
+    
+    res=rbind(res,lines[,mmsi:=mm])
+  }
+  return(res)
+}
+
+#segment ships lines
+
+breakTrajs<-function(shipsLines,timespan_threshold=12*3600){
+  
+  shipsLines[,tpid:=1]
+  shipsLines[timespan>=timespan_threshold,tpid:=0]
+  breakLines=shipsLines[tpid==0]
+  mmsis=breakLines[,.N,by=mmsi]$mmsi
+  
+  for(id in mmsis){
+    shipbreaks=breakLines[mmsi==id]
+    for (i in (1:(nrow(shipbreaks)-1))){
+      line1=shipbreaks[i]
+      line2=shipbreaks[i+1]
+      shipsLines[mmsi==id&lid>line1$lid&lid<line2$lid,tpid:=(i+1)]
+    }
+    shipsLines[mmsi==id&lid>line2$lid,tpid:=(i+2)]
+  }
+  return(shipsLines[tpid>0])
+}
+
+getRealTrips<-function(shipsTrips,goodTrips){
+  
+  trippoint=goodTrips[,list(from=min(time),to=max(time)),list(mmsi,tripid)]
+  res=shipsTrips[mmsi<0]
+  
+  #res=data.table(mmsi=0,tpid=0,tripid=0)[mmsi<0]
+  for (i in (1:nrow(trippoint))){
+    print(i)
+    
+    tp=trippoint[i]
+    #res1=shipsTrips[mmsi==tp$mmsi&time1==tp$time,list(mmsi,tpid)]
+    res1=shipsTrips[mmsi==tp$mmsi&time1>=tp$from&time1<=tp$to,.N,by=list(mmsi,tpid)]
+    if(nrow(res1)>0){
+      for(j in (1:nrow(res1))){
+        
+        temp=shipsTrips[mmsi==res1[j]$mmsi&tpid==res1[j]$tpid]
+        res=rbind(res,temp)
+        
+      }
+      
+    }
+  }
+  setkey(res,mmsi,tpid,lid)
+  return(res)
+
+}
+
+lineIntersection<-function(line1,lon){
+  
+  #Ax+BY+C=0
+  A=line1$lat2-line1$lat1
+  B=line1$lon1-line1$lon2
+  C=line1$lon2*line1$lat1-line1$lon1*line1$lat2
+  
+  lat=(-A*lon-C)/B
+  
+  return(data.table(lon=lon,lat=lat))
+  
+}
+
+#boundaryPoint of a trip
+#here trips are lines, 如果输入时points也是可以通过适当调整程序完成
+boundaryPoint<-function(trips){
+  
+  leftlon=118.90
+  rightlon=119.15
+  res=data.table(lon=0,lat=0,time=0,sog=0,tripid=0,mmsi=0,into=0,out=0)[mmsi<0]
+  tripids=trips[,.N,tripid]$tripid
+  #1 for left and 2 for right
+  infrom=1
+  outfrom=2
+  for(id in tripids){
+    
+    print(id)
+    
+    atrip=trips[tripid==id]
+    #当firstline和lastline两个点的位置相同时，系统自动寻找到两个位置点不同的直线段进行计算
+    firstline=atrip[distance>0][1]
+    f2l=abs(mean(firstline$lon1,firstline$lon2)-leftlon)
+    f2r=abs(mean(firstline$lon1,firstline$lon2)-rightlon)
+    lastline=atrip[distance>0][nrow(atrip[distance>0])]
+    l2l=abs(mean(lastline$lon1,lastline$lon2)-leftlon)
+    l2r=abs(mean(lastline$lon1,lastline$lon2)-rightlon)
+    
+    if(firstline$sog1>=20){
+      
+      if(f2l>=f2r){
+        firstpoint=lineIntersection(firstline,rightlon)
+        #偏的太大需要纠正
+        firstpoint[lat<32.245|lat>32.255,lat:=32.250]
+        infrom=2
+        
+      }else{
+        firstpoint=lineIntersection(firstline,leftlon)
+        firstpoint[lat<32.180|lat>32.190,lat:=32.185]
+        infrom=1
+      }
+      firstpoint[,sog:=firstline$sog1]
+      #如果sog=0怎么办？另外，如果最后一个点不在边界周边在泊位处怎么办
+      #1. 要限制点不在泊位处，2 限制航速至少>20
+      deltat1=distance(firstpoint$lon,firstpoint$lat,firstline$lon1,firstline$lat1)*3600*10/(firstline$sog1*1852)
+      firstpoint[,time:=firstline$time1-round(deltat1)]
+      
+    }
+    
+    #for last line
+    if(lastline$sog2>=20){
+      
+      if(l2l>=l2r){
+        lastpoint=lineIntersection(lastline,rightlon)
+        lastpoint[lat<32.245|lat>32.255,lat:=32.250]
+        outfrom=2
+      }else{
+        lastpoint=lineIntersection(lastline,leftlon)
+        lastpoint[lat<32.180|lat>32.190,lat:=32.185]
+        outfrom=1
+      }
+      lastpoint[,sog:=lastline$sog2]
+      deltat2=distance(lastpoint$lon,lastpoint$lat,lastline$lon2,lastline$lat2)*3600*10/(lastline$sog2*1852)
+      lastpoint[,time:=lastline$time2+round(deltat2)]
+      
+      
+    }
+    
+    res1=rbind(firstpoint[,list(lon,lat,time,sog)],atrip[,list(lon=lon1,lat=lat1,time=time1,sog=sog1)],
+               atrip[nrow(atrip),list(lon=lon2,lat=lat2,time=time2,sog=sog2)],lastpoint[,list(lon,lat,time,sog)])
+    res1=res1[,tripid:=atrip[1]$tripid]
+    res1=res1[,mmsi:=atrip[1]$mmsi]
+    res1=res1[,into:=infrom]
+    res1=res1[,out:=outfrom]
+    res=rbind(res,res1)
+  }
+  
+  return(res)
+}
+
