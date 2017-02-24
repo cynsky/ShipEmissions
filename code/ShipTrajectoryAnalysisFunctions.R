@@ -219,7 +219,7 @@ addSubTripStats<-function(subtrips,trip){
 ###------------combine all together-----------------------------------
 #input: s[mmsi,time,sog,lon,lat,status] only for one ship
 shipTraSegment<-function(s){
-  res=data.table(s[1],tripstayid=0,subtripid=0)[mmsi<0];
+  res=data.table(s[1],stayid=0,sid=0,tripid=0,tripstayid=0,subtripid=0)[mmsi<0]
   #individual ship
   dt=s[sog==0&status==5];
   if(nrow(dt)>0){
@@ -235,6 +235,7 @@ shipTraSegment<-function(s){
       addTripStats(trips,s)
   
   #individual trip------
+      #res=data.table(s[1],tripstayid=0,subtripid=0)[mmsi<0];
 
       n=nrow(trips)
       for(i in seq(1,n)){
