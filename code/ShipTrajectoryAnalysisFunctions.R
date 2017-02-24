@@ -6,21 +6,26 @@
 #get stay points based data with status=5 and sog=0, mainly berth area
 #also work for database with more then one mmsi
 getStayPoint<-function(dt,eps=3600*2,minp=5){
-  setkey(dt,mmsi,time)
-  temp3=dt[,.N,list(mmsi)]
-  nr=nrow(temp3)#how many ships
   r0=data.table(mmsi=0,stayid=0,startpid=0,endpid=0,duration=0,lon=0,lat=0)[mmsi<0]
-  for (i in seq(1,nr)){
-    r=temp3[i]
-    cship=dt[mmsi==r$mmsi]
-    cship2 <- as.matrix(cship[,list(time)])#get time series
-    cl2 <- dbscan(cship2, eps = eps, minPts =minp)
-    cship3=data.table(cbind(cship,stayid=cl2$cluster));
+  if(nrow(dt)>0){
+    setkey(dt,mmsi,time)
+    temp3=dt[,.N,list(mmsi)]
+    nr=nrow(temp3)#how many ships
     
-    temp=cship3[,list(startpid=first(.SD)$pid,endpid=last(.SD)$pid,duration=(last(.SD)$time-first(.SD)$time),lon=mean(.SD$lon),lat=mean(.SD$lat)),list(mmsi,stayid)]
-    
-    r0=rbind(r0,temp)      
+    for (i in seq(1,nr)){
+      r=temp3[i]
+      cship=dt[mmsi==r$mmsi]
+      cship2 <- as.matrix(cship[,list(time)])#get time series
+      cl2 <- dbscan(cship2, eps = eps, minPts =minp)
+      cship3=data.table(cbind(cship,stayid=cl2$cluster));
+      
+      temp=cship3[,list(startpid=first(.SD)$pid,endpid=last(.SD)$pid,duration=(last(.SD)$time-first(.SD)$time),lon=mean(.SD$lon),lat=mean(.SD$lat)),list(mmsi,stayid)]
+      
+      r0=rbind(r0,temp)      
+    }
+
   }
+  
   return(r0)
 }
 
@@ -214,39 +219,45 @@ addSubTripStats<-function(subtrips,trip){
 ###------------combine all together-----------------------------------
 #input: s[mmsi,time,sog,lon,lat,status] only for one ship
 shipTraSegment<-function(s){
-  
+  res=data.table(s[1],tripstayid=0,subtripid=0)[mmsi<0];
   #individual ship
   dt=s[sog==0&status==5];
-  sp=getStayPoint(dt,eps=3600*2,minp=5);sp=sp[stayid>0]
-  sp=mergeStayPoint(sp,eps=0.02,minp=2)
-  s=setStayId(s,sp)
-  s=setTripId(s,sp)
-  trips=s[tripid>0,.N,list(mmsi,tripid)];
-  addTripStats(trips,s)
+  if(nrow(dt)>0){
+    
+    sp=getStayPoint(dt,eps=3600*2,minp=5);sp=sp[stayid>0]
+    
+    if(nrow(sp>1)){
+
+      sp=mergeStayPoint(sp,eps=0.02,minp=2)
+      s=setStayId(s,sp)
+      s=setTripId(s,sp)
+      trips=s[tripid>0,.N,list(mmsi,tripid)];
+      addTripStats(trips,s)
   
   #individual trip------
-  
-  res=data.table(s[1],tripstayid=0,subtripid=0)[mmsi<0];
-  
-  n=nrow(trips)
-  for(i in seq(1,n)){
-    trip=s[tripid==trips[i]$tripid]
-    setkey(trip,mmsi,time)
-    #get trip stay point
-    tripStayPoint=getTripStayPoint(trip,soglimit=5,eps=0.002,minp=5);
-    #set trip stay id 
-    trip=setTripStayId(trip,tripStayPoint)
-    #set trip subtripid
-    trip=setTripSubTripId(trip,tripStayPoint);
-    res=rbind(res,trip)
+
+      n=nrow(trips)
+      for(i in seq(1,n)){
+        trip=s[tripid==trips[i]$tripid]
+        setkey(trip,mmsi,time)
+        #get trip stay point
+        tripStayPoint=getTripStayPoint(trip,soglimit=5,eps=0.002,minp=5);
+        #set trip stay id 
+        trip=setTripStayId(trip,tripStayPoint)
+        #set trip subtripid
+        trip=setTripSubTripId(trip,tripStayPoint);
+        res=rbind(res,trip)
     
+      }
+    #---------add subtripid and tripstayid to records with a tripid ==0, for example the stay points 
+      temp=s[tripid==0]
+      temp=temp[,tripstayid:=0]
+      temp=temp[,subtripid:=0]
+      res=rbind(res,temp)
+      #--------------
+      setkey(res,mmsi,time)
+    }
   }
-  #---------add subtripid and tripstayid to records with a tripid ==0, for example the stay points 
-  temp=s[tripid==0]
-  temp=temp[,tripstayid:=0]
-  temp=temp[,subtripid:=0]
-  res=rbind(res,temp)
-  #--------------
-  setkey(res,mmsi,time)
+  
   return(res)
 }
