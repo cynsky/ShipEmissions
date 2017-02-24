@@ -226,7 +226,7 @@ shipTraSegment<-function(s){
     
     sp=getStayPoint(dt,eps=3600*2,minp=5);sp=sp[stayid>0]
     
-    if(nrow(sp>1)){
+    if(nrow(sp)>1){
 
       sp=mergeStayPoint(sp,eps=0.02,minp=2)
       s=setStayId(s,sp)
