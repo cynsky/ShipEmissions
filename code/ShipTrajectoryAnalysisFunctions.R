@@ -128,6 +128,11 @@ getShipTripStats<-function(s){
 getTripStayPoint<-function(trip,soglimit=5,eps=0.002,minp=5){
   #add the first and last staypoint to the trip stay points
   dt=trip[sog<soglimit&status!=5]#very important
+  if(nrow(dt)>10000){
+    set.seed(123456)
+    dt=sample_n(dt,10000)
+  }
+  
   if(nrow(dt)>0){
     cship2 <- as.matrix(dt[,list(lon,lat)])#get time series
     cl2 <- dbscan(cship2, eps = eps, minPts =minp)
