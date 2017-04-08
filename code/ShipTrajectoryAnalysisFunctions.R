@@ -265,7 +265,7 @@ shipTraSegment<-function(s){
     
     sp=getStayPoint(dt,eps=3600*1,minp=3);sp=sp[stayid>0]
     
-    if(nrow(sp>1)){
+    if(nrow(sp)>1){
 
       sp=mergeStayPoint(sp,eps=0.02,minp=1)
       s=setStayId(s,sp)
@@ -274,7 +274,9 @@ shipTraSegment<-function(s){
       addTripStats(trips,s)
   
   #individual trip------
-      
+
+      #res=data.table(s[1],tripstayid=0,subtripid=0)[mmsi<0];
+
       n=nrow(trips)
       for(i in seq(1,n)){
         trip=s[tripid==trips[i]$tripid]
