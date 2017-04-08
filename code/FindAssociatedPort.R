@@ -82,16 +82,10 @@ head(temp3,30)
 head(temp3[country1=='China'|statsLabel1=='HONG KONG'],50)
 ##----------china--------------------------------------------------------------
 
-
-
 chinalnStats=lnStats[(country1=='China'|country1=='HONG KONG')&(country2=='China'|country2=='HONG KONG')]
 dim(chinalnStats);head(chinalnStats)
 
-
 write.csv(chinalnStats,'D:/Git/Rprojects/ShipEmissions/shipNetworkAnalysis/chinalnStats.csv')
-
-
-
 
 ##------------start maritime silk road------------------------------
 portnames=MaritimeSilk[,.N,port_name]$port_name
