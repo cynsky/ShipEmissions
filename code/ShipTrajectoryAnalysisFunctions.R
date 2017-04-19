@@ -5,7 +5,8 @@
 data2shp<-function(MyData,filepath){ 
   library(rgdal)
   library('sp')
-  coordinates(MyData)<-~lon+lat # whatever the equivalent is in your 
+  coordinates(MyData)<-c('lon','lat') # whatever the equivalent is in your 
+  proj4string(MyData) = CRS("+proj=longlat +datum=WGS84") 
   writeOGR(MyData, filepath, "layer name", driver = "ESRI Shapefile")  
 }
 
@@ -31,15 +32,41 @@ getStayPoint<-function(dt,eps=3600*2,minp=5){
   return(r0)
 }
 
+#just for a single ship, add an stayid to label whether a point is in a stop or not.
+#note:dt will be subset by status and sog
+timeCluster<-function(dt,eps=3600*2,minp=5){
+  #dt=tt
+  #dt=dt[,id:=0]
+  temp0=dt[status==5&sog==0]#point speed==0
+  if(nrow(temp0)>minp){
+    setkey(temp0,mmsi,time)
+    dm <- as.matrix(temp0[,list(time)])#get time series
+    cl <- dbscan(dm, eps = eps, minPts =minp)
+    temp1=data.table(temp0,id=cl$cluster);
+    temp2=temp1[id>0,list(startpid=.SD[1]$pid,endpid=.SD[nrow(.SD)]$pid,.N),list(mmsi,id)]#only get the id >0
+    n=nrow(temp2)
+    dt=dt[,stayid:=0]
+    if(n>0){
+      for( i in seq(1,n)){
+        r=temp2[i]
+        dt=dt[(pid>=r$startpid)&(pid<=r$endpid),stayid:=r$id]
+      }
+      return(dt) 
+    }
+  }
+}
+
 #combine stay points based on dbscan
 #the function will add a sid column
 #for stayid not in a cluster, just set sid=-stayid
-mergeStayPoint<-function(sp,eps=0.02,minp=2){
+mergeStayPoint<-function(sp,eps=0.005,minp=1){
   cship2 <- as.matrix(sp[,list(lon,lat)])#get time series
   cl2 <- dbscan(cship2, eps = eps, minPts =minp)
   cship3=data.table(cbind(sp,sid=cl2$cluster))
-  cship3=cship3[,stayid:=as.integer(stayid)]
-  cship3=cship3[sid==0,sid:=(10000L+stayid)]#pay attention on this line
+
+  cship3=cship3[,sid:=as.integer(sid)]
+  #cship3=cship3[sid==0,sid:=(100000+stayid)]#pay attention on this line
+
   return(cship3) 
 }
 
@@ -155,7 +182,7 @@ getShipTripStats<-function(s){
   #individual ship
   dt=s[sog==0&status==5];
   sp=getStayPoint(dt,eps=3600*2,minp=5);sp=sp[stayid>0]
-  sp=mergeStayPoint(sp,eps=0.02,minp=2)
+  sp=mergeStayPoint(sp,eps=0.005,minp=1)
   s=setStayId(s,sp)
   s=setTripId(s,sp)
   trips=s[tripid>0,.N,list(mmsi,tripid)];
@@ -233,14 +260,17 @@ setTripSubTripId<-function(trip,tripStayPoint){
 
 
 #add distance, duration,tripstayid1 and tripstayid2 to subtrips
-addSubTripStats<-function(subtrips,trip){
+#input1 subtrips: tripid,subtripid,.N
+#input2 dt:is the whole dataset of a ship trajectory already has subtripid labelled
+addSubTripStats<-function(dt,subtrips){
   
   subtrips=subtrips[,dist:=0]
   subtrips=subtrips[,dur:=0]
   n=nrow(subtrips)
   for (i in (seq(1,n))){
     id=subtrips[i]$subtripid
-    subtrip=trip[subtripid==id]
+    tid=subtrips[i]$tripid
+    subtrip=dt[tripid==tid&subtripid==id]
     m=nrow(subtrip)
     
     if(m>1){
@@ -267,22 +297,23 @@ addSubTripStats<-function(subtrips,trip){
 ###------------combine all together-----------------------------------
 #input: s[mmsi,time,sog,lon,lat,status] only for one ship
 shipTraSegment<-function(s){
-  res=data.table(s[1],stayid=0,sid=0,tripid=0,tripstayid=0,subtripid=0)[mmsi<0]
+  res=data.table(s[1],stayid=0,sid=0,tripid=0,tripstayid=0,subtripid=0)[mmsi<0];
   #individual ship
   dt=s[sog==0&status==5];
   if(nrow(dt)>0){
     
-    sp=getStayPoint(dt,eps=3600*2,minp=5);sp=sp[stayid>0]
+    sp=getStayPoint(dt,eps=3600*1,minp=3);sp=sp[stayid>0]
     
     if(nrow(sp)>1){
 
-      sp=mergeStayPoint(sp,eps=0.02,minp=2)
+      sp=mergeStayPoint(sp,eps=0.02,minp=1)
       s=setStayId(s,sp)
       s=setTripId(s,sp)
       trips=s[tripid>0,.N,list(mmsi,tripid)];
       addTripStats(trips,s)
   
   #individual trip------
+
       #res=data.table(s[1],tripstayid=0,subtripid=0)[mmsi<0];
 
       n=nrow(trips)
@@ -290,7 +321,7 @@ shipTraSegment<-function(s){
         trip=s[tripid==trips[i]$tripid]
         setkey(trip,mmsi,time)
         #get trip stay point
-        tripStayPoint=getTripStayPoint(trip,soglimit=5,eps=0.002,minp=5);
+        tripStayPoint=getTripStayPoint(trip,soglimit=2,eps=0.002,minp=5);
         #set trip stay id 
         trip=setTripStayId(trip,tripStayPoint)
         #set trip subtripid
