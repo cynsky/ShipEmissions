@@ -1,6 +1,15 @@
 
+#convert the csv document to esri shp documents
+#must have a lon and lat column as longitude and latitude
+#infile="D:/Git/data/terminals.csv"
+data2shp<-function(MyData,filepath){ 
+  library(rgdal)
+  library('sp')
+  coordinates(MyData)<-~lon+lat # whatever the equivalent is in your 
+  writeOGR(MyData, filepath, "layer name", driver = "ESRI Shapefile")  
+}
 
-##---------functions for a ship---------------------------------------
+##---------functions for a ship2---------------------------------------
 
 
 #get stay points based data with status=5 and sog=0, mainly berth area
@@ -8,22 +17,15 @@
 getStayPoint<-function(dt,eps=3600*2,minp=5){
   r0=data.table(mmsi=0,stayid=0,startpid=0,endpid=0,duration=0,lon=0,lat=0)[mmsi<0]
   if(nrow(dt)>0){
-    setkey(dt,mmsi,time)
-    temp3=dt[,.N,list(mmsi)]
-    nr=nrow(temp3)#how many ships
-    
-    for (i in seq(1,nr)){
-      r=temp3[i]
-      cship=dt[mmsi==r$mmsi]
-      cship2 <- as.matrix(cship[,list(time)])#get time series
-      cl2 <- dbscan(cship2, eps = eps, minPts =minp)
-      cship3=data.table(cbind(cship,stayid=cl2$cluster));
+   
+    cship2 <- as.matrix(dt[,list(time)])#get time series
+    cl2 <- dbscan(cship2, eps = eps, minPts =minp)
+    cship3=data.table(cbind(dt,stayid=cl2$cluster));
       
-      temp=cship3[,list(startpid=first(.SD)$pid,endpid=last(.SD)$pid,duration=(last(.SD)$time-first(.SD)$time),lon=mean(.SD$lon),lat=mean(.SD$lat)),list(mmsi,stayid)]
+    temp=cship3[,list(startpid=first(.SD)$pid,endpid=last(.SD)$pid,duration=(last(.SD)$time-first(.SD)$time),lon=mean(.SD$lon),lat=mean(.SD$lat)),list(mmsi,stayid)]
       
-      r0=rbind(r0,temp)      
-    }
-
+    r0=rbind(r0,temp)      
+  
   }
   
   return(r0)
@@ -36,10 +38,19 @@ mergeStayPoint<-function(sp,eps=0.02,minp=2){
   cship2 <- as.matrix(sp[,list(lon,lat)])#get time series
   cl2 <- dbscan(cship2, eps = eps, minPts =minp)
   cship3=data.table(cbind(sp,sid=cl2$cluster))
-  cship3=cship3[sid==0,sid:=(100000+stayid)]#pay attention on this line
+  cship3=cship3[,stayid:=as.integer(stayid)]
+  cship3=cship3[sid==0,sid:=(10000L+stayid)]#pay attention on this line
   return(cship3) 
 }
 
+mergeGlobalStayPoint<-function(sp,eps=0.005,minp=5){
+  cship2 <- as.matrix(sp[,list(lon,lat)])#get time series
+  cl2 <- dbscan(cship2, eps = eps, minPts =minp)
+  cship3=data.table(cbind(sp,sid=cl2$cluster))
+  #cship3=cship3[,sid:=as.integer(sid)]
+  #cship3=cship3[sid==0,sid:=(100000+stayid)]#pay attention on this line
+  return(cship3) 
+}
 
 #add stayid and sid to the original ship AIS records
 setStayId<-function(s,sp){
@@ -50,6 +61,20 @@ setStayId<-function(s,sp){
     l=sp[i]
     s[pid<=l$endpid&pid>=l$startpid,stayid:=l$stayid]
     s[pid<=l$endpid&pid>=l$startpid,sid:=l$sid]
+  }
+  return(s)
+  
+}
+
+#add stayid and sid to the original ship AIS records
+setGlobalStayId<-function(s,sp){
+  setkey(s,mmsi,pid)
+  s=s[,stayid:=0]
+  n=nrow(sp)
+  for(i in seq(1,n)){
+    l=sp[i]
+    s[mmsi==s$mmsi&(pid<=l$endpid)&(pid>=l$startpid),stayid:=l$stayid]
+    
   }
   return(s)
   
@@ -73,6 +98,23 @@ setTripId<-function(s,sp){
   return(s) 
 }
 
+
+#set tripid to the original one
+setGlobalTripId<-function(s,sp){
+  
+  n=nrow(sp)
+  s=s[,tripid:=0]
+  if(n>1){
+    sp1=sp[1:(n-1),list(mmsi,startpid1=startpid,endpid1=endpid)]
+    sp2=sp[2:n,list(startpid2=startpid,endpid2=endpid)]
+    spln=cbind(sp1,sp2)
+    for(i in seq(1,nrow(spln))){
+      l=spln[i]
+      s[pid>=l$endpid1&pid<=l$startpid2,tripid:=i]    
+    }
+  }
+  return(s) 
+}
 
 #add trips distance,duration, stayid,sid
 #all of the functions are for a single ship
@@ -103,6 +145,7 @@ addTripStats<-function(trips,s){
       trips[tripid==id,sid2:=last(trip)$sid]
     }
   }
+  return(trips)
   
 }
 
@@ -262,6 +305,30 @@ shipTraSegment<-function(s){
       res=rbind(res,temp)
       #--------------
       setkey(res,mmsi,time)
+    }
+  }
+  
+  return(res)
+}
+
+
+#input: s[mmsi,time,sog,lon,lat,status] only for one ship
+shipTraSegment2<-function(s){
+  res=data.table(mmsi=0,time=0,sog=0,lon=0,lat=0,status=0,pid=0,stayid=0,sid=0,tripid=0)[mmsi<0]
+  #individual ship
+  dt=s[sog==0&status==5];
+  if(nrow(dt)>0){
+    
+    sp=getStayPoint(dt,eps=3600*2,minp=5);sp=sp[stayid>0]
+    
+    if(nrow(sp)>1){
+      
+      sp=mergeStayPoint(sp,eps=0.02,minp=2)
+      s=setStayId(s,sp)
+      s=setTripId(s,sp)
+      res=rbind(res,s)
+      setkey(res,mmsi,time)
+      
     }
   }
   
