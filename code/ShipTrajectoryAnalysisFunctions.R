@@ -13,6 +13,7 @@ data2shp<-function(MyData,filepath){
 ##---------functions for a ship2---------------------------------------
 
 
+
 #get stay points based data with status=5 and sog=0, mainly berth area
 #also work for database with more then one mmsi
 getStayPoint<-function(dt,eps=3600*2,minp=5){
@@ -37,7 +38,7 @@ getStayPoint<-function(dt,eps=3600*2,minp=5){
 timeCluster<-function(dt,eps=3600*2,minp=5){
   #dt=tt
   #dt=dt[,id:=0]
-  temp0=dt[status==5&sog==0]#point speed==0
+  temp0=dt[status==5&sog<10]#point speed==0
   if(nrow(temp0)>minp){
     setkey(temp0,mmsi,time)
     dm <- as.matrix(temp0[,list(time)])#get time series
@@ -54,6 +55,25 @@ timeCluster<-function(dt,eps=3600*2,minp=5){
       return(dt) 
     }
   }
+}
+#space based cluster for each time cluster
+spaceCluster<-function(staydt,eps=0.0002,minp=3){
+  staydt=staydt[,stayid2:=0]
+  temp0=staydt[mmsi<0]
+  setkey(staydt,mmsi,time)
+  ids=staydt[stayid>0,.N,stayid]$stayid
+  m=length(ids)
+  if(m>0){
+    for(i in seq(1,m)){
+      s=staydt[stayid==ids[i]][,stayid2:=NULL]
+      dm <- as.matrix(s[,list(lon,lat)])#get time series
+      cl <- dbscan(dm, eps = eps, minPts =minp)
+      temp=data.table(s,stayid2=cl$cluster); 
+      temp0=rbind(temp0,temp)
+    }
+  }
+  temp2=rbind(temp0,staydt[stayid==0])#add back not stay points
+  return(temp2)
 }
 
 #combine stay points based on dbscan
@@ -79,15 +99,15 @@ mergeGlobalStayPoint<-function(sp,eps=0.005,minp=5){
   return(cship3) 
 }
 
-#add stayid and sid to the original ship AIS records
+#add sid to the original ship AIS records
 setStayId<-function(s,sp){
-  s=s[,stayid:=0]
   s=s[,sid:=0]
   n=nrow(sp)
   for(i in seq(1,n)){
     l=sp[i]
-    s[pid<=l$endpid&pid>=l$startpid,stayid:=l$stayid]
-    s[pid<=l$endpid&pid>=l$startpid,sid:=l$sid]
+    #print(paste(l$stayid,l$stayid2))
+    #flush.console()
+    s[(pid<=l$endpid)&(pid>=l$startpid),sid:=l$sid]
   }
   return(s)
   
@@ -148,6 +168,7 @@ setGlobalTripId<-function(s,sp){
 addTripStats<-function(trips,s){
   trips=trips[,dist:=0]
   trips=trips[,dur:=0]
+  trips=trips[,N:=0]
   n=nrow(trips)
   for (i in (seq(1,n))){
     id=trips[i]$tripid
@@ -161,13 +182,16 @@ addTripStats<-function(trips,s){
       tripln=cbind(trip1,trip2)
       
       tripln=tripln[,dist:=distance(lon1,lat1,lon2,lat2)]
-      tripln=tripln[,dur:=(time2-time1)]
+      tripln=tripln[,dur:=abs(time2-time1)]
       totalDist=sum(tripln$dist)
       totalDur=sum(tripln$dur)
       trips[tripid==id,dist:=totalDist]
       trips[tripid==id,dur:=totalDur]
-      trips[tripid==id,stayid1:=first(trip)$stayid]
-      trips[tripid==id,stayid2:=last(trip)$stayid]
+      trips[tripid==id,startstayid:=first(trip)$stayid]
+      trips[tripid==id,endstayid:=last(trip)$stayid]
+      trips[tripid==id,startstayid2:=first(trip)$stayid2]
+      trips[tripid==id,endstayid2:=last(trip)$stayid2]
+      trips[tripid==id,N:=m]
       trips[tripid==id,sid1:=first(trip)$sid]
       trips[tripid==id,sid2:=last(trip)$sid]
     }
